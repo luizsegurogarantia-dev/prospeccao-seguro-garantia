@@ -9,7 +9,7 @@ Os parâmetros vêm, nesta ordem de precedência:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
@@ -398,7 +398,16 @@ def carregar_config(
 
     overrides = {k: v for k, v in overrides.items() if v is not None}
     if overrides:
-        config = replace(config, **overrides)
+        # Aplicação manual (em vez de dataclasses.replace) para funcionar igual
+        # em todas as versões do Python, inclusive a 3.14 do Streamlit Cloud.
+        validos = {f.name for f in fields(Config) if f.init}
+        invalidos = sorted(set(overrides) - validos)
+        if invalidos:
+            raise TypeError(
+                "Parâmetro(s) inválido(s) para Config: " + ", ".join(invalidos)
+            )
+        for chave, valor in overrides.items():
+            setattr(config, chave, valor)
         # Reaplica a janela, pois data de referência/dias podem ter mudado.
         config.__post_init__()
 
