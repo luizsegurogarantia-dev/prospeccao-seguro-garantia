@@ -6,6 +6,7 @@ saida/
 saida_*/
 .cache_cnpj/
 .cache_web/
+.cache_sancoes/
 *.log
 
 .streamlit/secrets.toml

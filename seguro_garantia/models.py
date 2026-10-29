@@ -51,13 +51,23 @@ class RegistroLicitacao:
 
 @dataclass
 class DadosCNPJ:
-    """Dados cadastrais + contato de uma empresa, obtidos no enriquecimento."""
+    """Dossiê cadastral + contato de uma empresa, obtidos no enriquecimento."""
 
     cnpj: str
     razao_social: str = ""
     nome_fantasia: str = ""
     situacao: str = ""
+    situacao_data: str = ""
     cnae_principal: str = ""
+    cnaes_secundarios: list[str] = field(default_factory=list)
+    natureza_juridica: str = ""
+    porte: str = ""
+    capital_social: float = 0.0
+    data_abertura: str = ""
+    idade_anos: int | None = None
+    simples: str = ""
+    mei: str = ""
+    matriz_filial: str = ""
     endereco: str = ""
     cidade: str = ""
     uf: str = ""
@@ -67,10 +77,37 @@ class DadosCNPJ:
     socios: list[str] = field(default_factory=list)
     site: str = ""
     fonte: str = ""
+    # Sanções públicas (CEIS/CNEP). Verificado=True indica que a consulta rodou.
+    sancoes: list[str] = field(default_factory=list)
+    sancoes_verificado: bool = False
 
     @property
     def socios_str(self) -> str:
         return "; ".join(self.socios) if self.socios else "Não localizado"
+
+    @property
+    def sancoes_str(self) -> str:
+        if not self.sancoes_verificado:
+            return "Não verificado"
+        if not self.sancoes:
+            return "LIMPA"
+        return "; ".join(self.sancoes)
+
+    @property
+    def perfil_str(self) -> str:
+        """Resumo de uma linha para leitura rápida na planilha."""
+        partes: list[str] = []
+        if self.porte:
+            partes.append(self.porte)
+        if self.capital_social:
+            partes.append(f"capital R$ {self.capital_social:,.0f}".replace(",", "."))
+        if self.idade_anos is not None:
+            partes.append(f"{self.idade_anos} ano(s) de atividade")
+        if self.simples:
+            partes.append(f"Simples: {self.simples}")
+        if self.mei:
+            partes.append(f"MEI: {self.mei}")
+        return " | ".join(partes) if partes else "Não localizado"
 
 
 @dataclass

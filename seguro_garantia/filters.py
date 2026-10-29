@@ -17,6 +17,24 @@ RE_PERCENTUAL = re.compile(r"(\d{1,2}(?:[.,]\d{1,2})?)\s*%")
 RE_VALOR_GARANTIA = re.compile(
     r"garantia[^.]{0,120}?r\$\s*([\d.,]+)", re.IGNORECASE
 )
+# "prazo de 10 (dez) dias", "em até 5 dias úteis", "no prazo de 30 dias"
+RE_PRAZO_DIAS = re.compile(
+    r"(?:prazo|ate|até|dentro de)\D{0,25}?(\d{1,3})\s*(?:\([^)]*\)\s*)?dias",
+    re.IGNORECASE,
+)
+# "vigência de 12 meses", "vigência mínima de 3 anos"
+RE_VIGENCIA = re.compile(
+    r"vig[eê]ncia[^.]{0,40}?(\d{1,3})\s*(dias|meses|anos)", re.IGNORECASE
+)
+MODALIDADES = (
+    ("seguro-garantia", "Seguro garantia"),
+    ("seguro garantia", "Seguro garantia"),
+    ("fianca bancaria", "Fiança bancária"),
+    ("fiança bancária", "Fiança bancária"),
+    ("caucao em dinheiro", "Caução em dinheiro"),
+    ("caucao", "Caução"),
+    ("título de capitalização", "Título de capitalização"),
+)
 
 
 def normalizar(texto: str) -> str:
@@ -113,3 +131,57 @@ def valor_garantia_em_texto(texto: str) -> float | None:
         return float(bruto)
     except ValueError:
         return None
+
+
+def extrair_clausula_garantia(texto: str) -> dict[str, str]:
+    """Extrai os termos da cláusula de garantia para a planilha.
+
+    Devolve um dicionário com `percentual`, `prazo`, `modalidade` e `vigencia`
+    já formatados para leitura humana. Campos não encontrados vêm vazios.
+    """
+    vazio = {"percentual": "", "prazo": "", "modalidade": "", "vigencia": ""}
+    if not texto:
+        return vazio
+
+    base = normalizar(texto)
+    janelas: list[str] = []
+    inicio = 0
+    for _ in range(4):
+        idx = base.find("garantia", inicio)
+        if idx < 0:
+            break
+        janelas.append(base[max(0, idx - 120) : idx + 700])
+        inicio = idx + 1
+    if not janelas:
+        return vazio
+
+    percentual = ""
+    prazo = ""
+    vigencia = ""
+    modalidades: list[str] = []
+
+    for janela in janelas:
+        if not percentual:
+            for achado in RE_PERCENTUAL.finditer(janela):
+                valor = float(achado.group(1).replace(",", "."))
+                if 0 < valor <= 30:
+                    percentual = f"{valor:g}%"
+                    break
+        if not prazo:
+            achado = RE_PRAZO_DIAS.search(janela)
+            if achado:
+                prazo = f"{int(achado.group(1))} dias"
+        if not vigencia:
+            achado = RE_VIGENCIA.search(janela)
+            if achado:
+                vigencia = f"{int(achado.group(1))} {achado.group(2).lower()}"
+        for termo, rotulo in MODALIDADES:
+            if rotulo not in modalidades and normalizar(termo) in janela:
+                modalidades.append(rotulo)
+
+    return {
+        "percentual": percentual,
+        "prazo": prazo,
+        "modalidade": " / ".join(modalidades[:3]),
+        "vigencia": vigencia,
+    }

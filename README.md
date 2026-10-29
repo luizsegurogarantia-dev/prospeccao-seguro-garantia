@@ -5,11 +5,13 @@ têm relação com **garantia contratual** (Lei 14.133/2021, arts. 96 a 102),
 **enriquece os contatos das empresas vencedoras** e gera **um único arquivo
 Excel/CSV** pronto para prospecção comercial.
 
-O resultado responde a três perguntas de uma vez:
+O resultado responde a quatro perguntas de uma vez:
 
 1. **Quem ganhou** a licitação/contrato (CNPJ e razão social)?
 2. **Qual é o dinheiro envolvido** (valor do contrato e valor estimado da garantia)?
 3. **Como falar com essa empresa** (sócios, telefones, celular/WhatsApp, e-mail)?
+4. **A empresa está apta e o edital aceita seguro?** (dossiê cadastral, sanções
+   CEIS/CNEP e a cláusula de garantia extraída do texto do edital)
 
 ---
 
@@ -56,7 +58,11 @@ Depois edite o `.env`. Os parâmetros principais:
 | `UFS` | vazio | Ex.: `SP,RJ,MG` (vazio = Brasil inteiro) |
 | `DIRETORIO_SAIDA` | `./saida` | Onde a planilha é salva |
 | `ENRIQUECER_CNPJ` | `true` | Busca sócios/telefone/e-mail do CNPJ |
-| `ENRIQUECER_WEB` | `false` | Busca contatos no Google/site (mais lento) |
+| `ENRIQUECER_WEB` | `true` | Busca contatos no Google/site (mais lento) |
+| `ENRIQUECER_SANCOES` | `true` | Consulta CEIS/CNEP (exige `TRANSPARENCIA_API_KEY`) |
+| `TRANSPARENCIA_API_KEY` | vazio | Chave gratuita do Portal da Transparência |
+| `LER_ANEXOS_PDF` | `false` | Lê o edital e extrai a cláusula de garantia |
+| `LER_PDF_MAX_REGISTROS` | `30` | Quantos contratos (maiores valores) têm PDF lido |
 
 Existem muitos outros parâmetros; veja os comentários do `.env.example`.
 
@@ -151,12 +157,14 @@ saida/prospeccao_seguro_garantia_AAAAMMDD_HHMM.csv
 - O **Excel** tem duas abas: `Prospeccao` (a carteira) e `Parametros` (o que foi usado na busca).
 - O **CSV** usa separador `;` e codificação UTF-8 com BOM (abre certo no Excel pt-BR).
 
-Também são criadas pastas de **cache** (`.cache_cnpj/` e `.cache_web/`): elas
+Também são criadas pastas de **cache** (`.cache_cnpj/`, `.cache_web/` e `.cache_sancoes/`): elas
 guardam as consultas já feitas, então rodar de novo é muito mais rápido.
 
 ---
 
-## 7. Entendendo a planilha (as 17 colunas)
+## 7. Entendendo a planilha (as 32 colunas)
+
+### Identificação e valores
 
 | # | Coluna | O que significa |
 | --- | --- | --- |
@@ -172,18 +180,54 @@ guardam as consultas já feitas, então rodar de novo é muito mais rápido.
 | 10 | `Link_Edital_Contrato` | Link para o edital/contrato (clique no Excel) |
 | 11 | `CNPJ_Vencedor` | CNPJ da empresa ganhadora |
 | 12 | `Razao_Social_Vencedora` | Razão social / nome fantasia |
-| 13 | `Socios_Administradores` | Sócios/administradores do QSA (para abordagem) |
-| 14 | `Telefone_Receita` | Telefone do cadastro público |
-| 15 | `Celular_WhatsApp_Encontrado` | Celular/WhatsApp localizado na busca |
-| 16 | `Email_Contato` | E-mails encontrados |
-| 17 | `Cidade_Empresa` | Cidade/UF sede da empresa |
+
+### Dossiê da empresa (Receita Federal via BrasilAPI)
+
+| # | Coluna | O que significa |
+| --- | --- | --- |
+| 13 | `Socios_Administradores` | QSA completo (até 12), com qualificação e data de entrada |
+| 14 | `Perfil_Empresa` | Resumo de uma linha: porte, capital, idade, Simples/MEI |
+| 15 | `Porte_Empresa` | MEI, Microempresa, EPP ou Demais |
+| 16 | `Capital_Social` | Capital social declarado (R$) |
+| 17 | `Data_Abertura` | Data de início de atividade |
+| 18 | `Idade_Empresa` | Anos de atividade (empresa nova costuma ser recusada) |
+| 19 | `Natureza_Juridica` | Define quem assina e quem pode outorgar |
+| 20 | `Simples_Nacional` | Sim / Não / Não localizado |
+| 21 | `CNAE_Principal` | Ramo principal da empresa |
+| 22 | `Sancoes` | `LIMPA`, lista de punições CEIS/CNEP ou `Não verificado` |
+| 23 | `Cidade_Empresa` | Endereço completo da sede |
+
+### Cláusula de garantia do edital
+
+Extraída do texto do edital/contrato quando `--ler-pdf` está ativo (ou quando o
+portal já entrega o texto). Vazia quando não houve leitura; `Não identificado`
+quando houve leitura mas a cláusula não foi encontrada.
+
+| # | Coluna | O que significa |
+| --- | --- | --- |
+| 24 | `Garantia_Percentual_Edital` | Percentual exigido (ex.: `10%`) |
+| 25 | `Prazo_Apresentacao_Garantia` | Prazo para apresentar (ex.: `10 dias`) |
+| 26 | `Modalidade_Garantia_Aceita` | Seguro garantia, fiança, caução, título |
+| 27 | `Vigencia_Garantia` | Vigência exigida (ex.: `12 meses`) |
+
+### Contatos
+
+| # | Coluna | O que significa |
+| --- | --- | --- |
+| 28 | `Telefone_Receita` | Telefone institucional do cadastro público |
+| 29 | `Celular_WhatsApp_Encontrado` | Celular/WhatsApp localizado na busca |
+| 30 | `Email_Contato` | Até 3 e-mails válidos (sintaxe + MX do domínio) |
+| 31 | `Site_Empresa` | Site oficial localizado na busca |
+| 32 | `Outros_Emails` | E-mails adicionais (até 10 no total) |
 
 **Uso no contato:** cite as colunas 6–7 (`Orgao_Licitante`, `Objeto_Contratado`)
 e a data (coluna 3) — é o conjunto que permite o vencedor identificar de qual
-edital/contrato estamos falando.
+edital/contrato estamos falando. Se a coluna 24 estiver preenchida, use o número
+exato: *"o contrato exige 10% em 10 dias — consigo cotar hoje"*.
 
 **Prioridade de abordagem:** a planilha já vem ordenada da maior garantia
-estimada (coluna 9) para a menor — comece pelas primeiras linhas.
+estimada (coluna 9) para a menor — comece pelas primeiras linhas. Descarte ou
+deixe para depois quem estiver com sanção ativa na coluna 22.
 
 ---
 
@@ -249,7 +293,7 @@ seguro-garantia-b2b/
     ├── http_client.py          # requisições com retry e rate-limit
     ├── models.py               # estruturas de dados
     ├── filters.py              # filtro de garantia + cálculo
-    ├── exporter.py             # gera Excel/CSV (17 colunas)
+    ├── exporter.py             # gera Excel/CSV (32 colunas)
     ├── pdf_text.py             # lê PDF de edital (opcional)
     ├── pipeline.py             # orquestra tudo
     ├── cli.py                  # linha de comando

@@ -11,8 +11,10 @@ computador desligado.
 
 1. Acesse <https://github.com/signup> e crie a conta (se ainda não tiver).
 2. Confirme o e-mail.
-3. Crie um repositório **privado** chamado `prospeccao-seguro-garantia`
+3. Crie um repositório **público** chamado `prospeccao-seguro-garantia`
    (<https://github.com/new>). Não marque README, .gitignore nem licença.
+   (O plano gratuito do Streamlit Cloud exige repositório público; o `.env`,
+   os caches e a pasta `saida/` ficam fora do Git pelo `.gitignore`.)
 
 ## 2. Enviar o código
 
@@ -23,13 +25,13 @@ cd "~/Documentos/Default Project/seguro-garantia-b2b"
 git init
 git add .
 git commit -m "Prospecção Seguro Garantia - versão Streamlit"
-gh repo create prospeccao-seguro-garantia --private --source=. --push
+gh repo create prospeccao-seguro-garantia --public --source=. --push
 ```
 
 ## 3. Criar o app no Streamlit Cloud
 
 1. Acesse <https://share.streamlit.io> e entre com a conta do GitHub.
-2. Autorize o acesso ao repositório privado quando pedir.
+2. Autorize o acesso ao repositório quando pedir.
 3. Clique em **New app** e preencha:
    - **Repository:** `SEU-USUARIO/prospeccao-seguro-garantia`
    - **Branch:** `main`
@@ -38,6 +40,11 @@ gh repo create prospeccao-seguro-garantia --private --source=. --push
 
    ```toml
    APP_SENHA = "escolha-uma-senha-forte"
+
+   # Opcional: sanções CEIS/CNEP (chave gratuita em
+   # https://api.portaldatransparencia.gov.br). Sem a chave, a coluna
+   # "Sancoes" aparece como "Não verificado".
+   TRANSPARENCIA_API_KEY = "sua-chave"
    ```
 
 5. Clique em **Deploy**. Em 2 a 4 minutos o link fica pronto.
@@ -45,11 +52,13 @@ gh repo create prospeccao-seguro-garantia --private --source=. --push
 ## 4. O que esperar
 
 - **O link é permanente** e funciona com o computador desligado.
-- A pasta `saida/` e os caches (`.cache_cnpj`, `.cache_web`) são **temporários**:
+- A pasta `saida/` e os caches (`.cache_cnpj`, `.cache_web`, `.cache_sancoes`) são **temporários**:
   somem quando o serviço reinicia. O download do Excel continua funcionando na
   mesma execução.
 - Buscas muito longas (Brasil inteiro, 30 dias) podem ser interrompidas pelo
   limite de recursos. Prefira `UFs = SP` e janelas de 7 dias.
+- A leitura de PDFs é limitada a `LER_PDF_MAX_REGISTROS` (padrão 30) e prioriza
+  os contratos de maior valor, para não estourar a memória de 1 GB.
 - A primeira execução depois de um período parado demora ~1 min (o app "acorda").
 
 ## 5. Atualizar o site depois

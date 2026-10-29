@@ -15,6 +15,8 @@ import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, fields
+from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
 
@@ -25,6 +27,9 @@ from ..models import DadosCNPJ
 log = logging.getLogger("seguro_garantia.cnpj")
 
 Progresso = Callable[[str, int, int], None]
+
+# Muda quando o conjunto de campos extraídos muda, para invalidar caches antigos.
+VERSAO_CACHE_CNPJ = 2
 
 # Ordem de prioridade para escolher os decisores dentro do QSA.
 PRIORIDADE_QUALIFICACAO = (
@@ -148,8 +153,18 @@ class EnriquecendorCNPJ:
             cnpj=d.get("cnpj", ""),
             razao_social=d.get("razao_social", "") or "",
             nome_fantasia=d.get("nome_fantasia", "") or "",
-            situacao=d.get("descricao_situacao_cadastral", "") or "",
+            situacao=_formatar_situacao(d.get("descricao_situacao_cadastral")),
+            situacao_data=_formatar_data(d.get("data_situacao_cadastral")),
             cnae_principal=_formatar_cnae(d.get("cnae_fiscal"), d.get("cnae_fiscal_descricao")),
+            cnaes_secundarios=_extrair_cnaes_secundarios(d.get("cnaes_secundarios")),
+            natureza_juridica=d.get("natureza_juridica", "") or "",
+            porte=_formatar_porte(d.get("porte")),
+            capital_social=_numero(d.get("capital_social")),
+            data_abertura=_formatar_data(d.get("data_inicio_atividade")),
+            idade_anos=_idade_anos(d.get("data_inicio_atividade")),
+            simples=_sim_nao(d.get("opcao_pelo_simples")),
+            mei=_sim_nao(d.get("opcao_pelo_mei")),
+            matriz_filial=d.get("descricao_identificador_matriz_filial", "") or "",
             endereco=_montar_endereco(d),
             cidade=d.get("municipio", "") or "",
             uf=d.get("uf", "") or "",
@@ -167,10 +182,20 @@ class EnriquecendorCNPJ:
             cnpj=_limpar_cnpj(d.get("cnpj", "")),
             razao_social=d.get("nome", "") or "",
             nome_fantasia=d.get("fantasia", "") or "",
-            situacao=d.get("situacao", "") or "",
+            situacao=_formatar_situacao(d.get("situacao")),
+            situacao_data=_formatar_data(d.get("data_situacao")),
             cnae_principal=_formatar_cnae(
                 atividades[0].get("code"), atividades[0].get("text")
             ),
+            cnaes_secundarios=_extrair_cnaes_secundarios(d.get("atividades_secundarias")),
+            natureza_juridica=d.get("natureza_juridica", "") or "",
+            porte=_formatar_porte(d.get("porte")),
+            capital_social=_numero(d.get("capital_social")),
+            data_abertura=_formatar_data(d.get("abertura")),
+            idade_anos=_idade_anos(d.get("abertura")),
+            simples=_sim_nao(d.get("simples")),
+            mei=_sim_nao(d.get("mei")),
+            matriz_filial=d.get("tipo", "") or "",
             endereco=_montar_endereco(
                 {
                     "descricao_tipo_de_logradouro": "",
@@ -212,12 +237,29 @@ class EnriquecendorCNPJ:
                 "cep": est.get("cep", ""),
             }
         )
+        natureza = d.get("natureza_juridica") or {}
+        if isinstance(natureza, dict):
+            natureza = natureza.get("descricao", "")
+        simples = d.get("simples") or {}
+        mei = d.get("mei") or {}
         return DadosCNPJ(
             cnpj=_limpar_cnpj(est.get("cnpj", "")),
             razao_social=d.get("razao_social", "") or "",
             nome_fantasia=(est.get("nome_fantasia") or "").strip(),
-            situacao=est.get("situacao_cadastral", "") or "",
+            situacao=_formatar_situacao(est.get("situacao_cadastral")),
+            situacao_data=_formatar_data(est.get("data_situacao_cadastral")),
             cnae_principal=_formatar_cnae(cnae, descricao),
+            cnaes_secundarios=_extrair_cnaes_secundarios(
+                est.get("atividades_secundarias")
+            ),
+            natureza_juridica=str(natureza or ""),
+            porte=_formatar_porte(d.get("porte")),
+            capital_social=_numero(d.get("capital_social")),
+            data_abertura=_formatar_data(est.get("data_inicio_atividade")),
+            idade_anos=_idade_anos(est.get("data_inicio_atividade")),
+            simples=_sim_nao(simples.get("data_opcao") if isinstance(simples, dict) else simples),
+            mei=_sim_nao(mei.get("data_opcao") if isinstance(mei, dict) else mei),
+            matriz_filial=est.get("tipo", "") or "",
             endereco=endereco,
             cidade=(est.get("cidade") or {}).get("nome", "") or "",
             uf=(est.get("estado") or {}).get("sigla", "") or "",
@@ -242,27 +284,23 @@ class EnriquecendorCNPJ:
             return None
         if not isinstance(d, dict) or "razao_social" not in d:
             return None
-        return DadosCNPJ(
-            cnpj=d.get("cnpj", cnpj),
-            razao_social=d.get("razao_social", ""),
-            nome_fantasia=d.get("nome_fantasia", ""),
-            situacao=d.get("situacao", ""),
-            cnae_principal=d.get("cnae_principal", ""),
-            endereco=d.get("endereco", ""),
-            cidade=d.get("cidade", ""),
-            uf=d.get("uf", ""),
-            telefone_1=d.get("telefone_1", ""),
-            telefone_2=d.get("telefone_2", ""),
-            email=d.get("email", ""),
-            socios=list(d.get("socios") or []),
-            site=d.get("site", ""),
-            fonte=d.get("fonte", "cache"),
-        )
+        # Cache antigo (sem o dossiê completo) é descartado e consultado de novo.
+        if d.get("_versao") != VERSAO_CACHE_CNPJ:
+            return None
+        validos = {f.name for f in fields(DadosCNPJ)}
+        dados = {k: v for k, v in d.items() if k in validos}
+        dados["cnpj"] = dados.get("cnpj") or cnpj
+        try:
+            return DadosCNPJ(**dados)
+        except TypeError:
+            return None
 
     def _gravar_cache(self, cnpj: str, dados: DadosCNPJ) -> None:
+        payload = asdict(dados)
+        payload["_versao"] = VERSAO_CACHE_CNPJ
         try:
             self._caminho_cache(cnpj).write_text(
-                json.dumps(dados.__dict__, ensure_ascii=False), encoding="utf-8"
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
             )
         except OSError:
             pass
@@ -299,8 +337,8 @@ def _montar_endereco(d: dict) -> str:
     return ", ".join(p for p in partes if p)
 
 
-def _extrair_socios(qsa: list[dict]) -> list[str]:
-    """Ordena o QSA por poder de decisão e devolve nomes com a qualificação."""
+def _extrair_socios(qsa: list[dict], limite: int = 12) -> list[str]:
+    """Ordena o QSA por poder de decisão e devolve nome, qualificação e entrada."""
     itens = []
     for socio in qsa:
         nome = (socio.get("nome_socio") or socio.get("nome") or "").strip()
@@ -310,13 +348,107 @@ def _extrair_socios(qsa: list[dict]) -> list[str]:
         if isinstance(qualificacao, dict):  # formato do cnpj.ws
             qualificacao = qualificacao.get("descricao", "")
         qualificacao = str(qualificacao).strip()
-        itens.append((_peso_qualificacao(qualificacao), nome, qualificacao))
+        entrada = _formatar_data(
+            socio.get("data_entrada_sociedade")
+            or socio.get("data_entrada")
+            or ""
+        )
+        itens.append((_peso_qualificacao(qualificacao), nome, qualificacao, entrada))
 
     itens.sort(key=lambda x: x[0])
     nomes = []
-    for _, nome, qualificacao in itens[:4]:
-        nomes.append(f"{nome} ({qualificacao})" if qualificacao else nome)
+    for _, nome, qualificacao, entrada in itens[:limite]:
+        detalhe = ", ".join(p for p in [qualificacao, f"desde {entrada}" if entrada else ""] if p)
+        nomes.append(f"{nome} ({detalhe})" if detalhe else nome)
     return nomes
+
+
+def _extrair_cnaes_secundarios(lista: object) -> list[str]:
+    """Normaliza a lista de CNAEs secundários para 'codigo - descricao'."""
+    if not isinstance(lista, list):
+        return []
+    itens: list[str] = []
+    for item in lista[:8]:
+        if not isinstance(item, dict):
+            continue
+        codigo = item.get("codigo") or item.get("code") or item.get("subclasse")
+        descricao = item.get("descricao") or item.get("text")
+        formatado = _formatar_cnae(codigo, descricao)
+        if formatado and formatado not in itens:
+            itens.append(formatado)
+    return itens
+
+
+def _numero(valor: object) -> float:
+    """Converte '1.000,50', '1000.50' ou 1000 em float."""
+    if valor is None or valor == "":
+        return 0.0
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    texto = str(valor).strip()
+    if "," in texto:  # formato brasileiro
+        texto = texto.replace(".", "").replace(",", ".")
+    try:
+        return float(texto)
+    except ValueError:
+        return 0.0
+
+
+def _sim_nao(valor: object) -> str:
+    if valor is None or valor == "":
+        return ""
+    if isinstance(valor, bool):
+        return "Sim" if valor else "Não"
+    texto = str(valor).strip().lower()
+    if texto in {"true", "sim", "s", "1", "yes"}:
+        return "Sim"
+    if texto in {"false", "nao", "não", "n", "0", "no"}:
+        return "Não"
+    return "Sim"  # data de opção preenchida = optante
+
+
+def _formatar_porte(valor: object) -> str:
+    """Converte os rótulos em caixa alta das APIs para leitura humana."""
+    texto = str(valor or "").strip()
+    if not texto:
+        return ""
+    mapa = {
+        "DEMAIS": "Demais",
+        "MEI": "MEI",
+        "MICRO EMPRESA": "Microempresa",
+        "EMPRESA DE PEQUENO PORTE": "EPP",
+    }
+    return mapa.get(texto.upper(), texto.title())
+
+
+def _formatar_situacao(valor: object) -> str:
+    texto = str(valor or "").strip()
+    return texto.capitalize() if texto else ""
+
+
+def _formatar_data(valor: object) -> str:
+    """Aceita ISO (2020-01-31) ou DD/MM/AAAA e devolve DD/MM/AAAA."""
+    if not valor:
+        return ""
+    texto = str(valor).strip()[:10]
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(texto, fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            continue
+    return ""
+
+
+def _idade_anos(valor: object) -> int | None:
+    data = _formatar_data(valor)
+    if not data:
+        return None
+    try:
+        abertura = datetime.strptime(data, "%d/%m/%Y").date()
+    except ValueError:
+        return None
+    hoje = date.today()
+    return hoje.year - abertura.year - ((hoje.month, hoje.day) < (abertura.month, abertura.day))
 
 
 def _peso_qualificacao(qualificacao: str) -> int:

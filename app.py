@@ -13,9 +13,13 @@ from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+from dotenv import load_dotenv
 
 from seguro_garantia.config import carregar_config
 from seguro_garantia.pipeline import executar
+
+# Torna as variáveis do .env visíveis já na sidebar (chave de sanções, etc.).
+load_dotenv(override=False)
 
 st.set_page_config(page_title="Prospecção Seguro Garantia", page_icon="🛡️", layout="wide")
 
@@ -109,6 +113,16 @@ def _sidebar() -> dict:
     enriquecer_web = st.sidebar.checkbox(
         "Buscar contatos na web (e-mail/WhatsApp)", value=True
     )
+    chave_transparencia = _chave_transparencia()
+    enriquecer_sancoes = st.sidebar.checkbox(
+        "Consultar sanções CEIS/CNEP",
+        value=bool(chave_transparencia),
+        disabled=not chave_transparencia,
+        help=(
+            "Exige TRANSPARENCIA_API_KEY (variável de ambiente ou Secrets). "
+            "Cadastro gratuito: https://api.portaldatransparencia.gov.br"
+        ),
+    )
     sem_teto_web = st.sidebar.checkbox(
         "Sem teto de empresas (web)", value=True, disabled=not enriquecer_web
     )
@@ -152,6 +166,8 @@ def _sidebar() -> dict:
         enriquecer_cnpj=enriquecer_cnpj,
         usar_receitaws=usar_receitaws,
         enriquecer_web=enriquecer_web,
+        enriquecer_sancoes=enriquecer_sancoes,
+        transparencia_api_key=chave_transparencia or None,
         web_max_empresas=0 if sem_teto_web else int(web_max),
         max_workers=int(max_workers),
         diretorio_saida=Path(diretorio),
@@ -160,15 +176,24 @@ def _sidebar() -> dict:
     )
 
 
+def _segredo(nome: str) -> str:
+    """Lê uma configuração sensível da variável de ambiente ou dos Secrets."""
+    valor = os.environ.get(nome, "").strip()
+    if valor:
+        return valor
+    try:
+        return str(st.secrets.get(nome, "")).strip()
+    except Exception:  # noqa: BLE001 - sem arquivo de secrets, segue sem valor
+        return ""
+
+
+def _chave_transparencia() -> str:
+    return _segredo("TRANSPARENCIA_API_KEY")
+
+
 def _senha_configurada() -> str:
     """Lê a senha de APP_SENHA (variável de ambiente) ou dos Secrets do Streamlit."""
-    senha = os.environ.get("APP_SENHA", "").strip()
-    if senha:
-        return senha
-    try:
-        return str(st.secrets.get("APP_SENHA", "")).strip()
-    except Exception:  # noqa: BLE001 - sem arquivo de secrets, segue sem senha
-        return ""
+    return _segredo("APP_SENHA")
 
 
 def _exigir_senha() -> None:

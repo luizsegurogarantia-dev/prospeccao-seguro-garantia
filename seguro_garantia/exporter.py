@@ -37,6 +37,24 @@ COLUNAS = [
     "Celular_WhatsApp_Encontrado",
     "Email_Contato",
     "Cidade_Empresa",
+    # --- Dossiê da empresa (a partir da Fase 1) ---
+    "Perfil_Empresa",
+    "Porte_Empresa",
+    "Capital_Social",
+    "Data_Abertura",
+    "Idade_Empresa",
+    "Natureza_Juridica",
+    "Simples_Nacional",
+    "CNAE_Principal",
+    "Sancoes",
+    # --- Cláusula de garantia do edital/contrato ---
+    "Garantia_Percentual_Edital",
+    "Prazo_Apresentacao_Garantia",
+    "Modalidade_Garantia_Aceita",
+    "Vigencia_Garantia",
+    # --- Contatos complementares ---
+    "Site_Empresa",
+    "Outros_Emails",
 ]
 
 LARGURAS = {
@@ -57,10 +75,30 @@ LARGURAS = {
     "Celular_WhatsApp_Encontrado": 22,
     "Email_Contato": 32,
     "Cidade_Empresa": 26,
+    "Perfil_Empresa": 42,
+    "Porte_Empresa": 16,
+    "Capital_Social": 16,
+    "Data_Abertura": 14,
+    "Idade_Empresa": 12,
+    "Natureza_Juridica": 30,
+    "Simples_Nacional": 12,
+    "CNAE_Principal": 40,
+    "Sancoes": 34,
+    "Garantia_Percentual_Edital": 14,
+    "Prazo_Apresentacao_Garantia": 20,
+    "Modalidade_Garantia_Aceita": 26,
+    "Vigencia_Garantia": 16,
+    "Site_Empresa": 30,
+    "Outros_Emails": 34,
 }
 
-COLUNAS_MOEDA = ("Valor_Contrato", "Valor_Garantia_Estimado")
-COLUNAS_TEXTO_LONGO = ("Objeto_Contratado", "Socios_Administradores")
+COLUNAS_MOEDA = ("Valor_Contrato", "Valor_Garantia_Estimado", "Capital_Social")
+COLUNAS_TEXTO_LONGO = (
+    "Objeto_Contratado",
+    "Socios_Administradores",
+    "Sancoes",
+    "Perfil_Empresa",
+)
 
 VERDE = "1F6F43"
 CINZA_CLARO = "F2F2F2"

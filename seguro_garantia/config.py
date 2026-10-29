@@ -235,6 +235,11 @@ class Config:
     pausa_cnpj: float = 0.5  # pausa entre consultas de CNPJ (APIs aguentam menor)
     max_workers: int = 6  # paralelismo (threads) no enriquecimento
 
+    # Sanções públicas (CEIS/CNEP) — exige chave gratuita do Portal da Transparência
+    enriquecer_sancoes: bool = True
+    transparencia_api_key: str = ""
+    pausa_sancoes: float = 0.3
+
     # Desempenho / resiliência
     pausa_entre_requisicoes: float = 3.0
     max_paginas: int = 200
@@ -251,6 +256,9 @@ class Config:
     # Diretórios de cache
     diretorio_cache_cnpj: Path = field(default_factory=lambda: Path("./.cache_cnpj"))
     diretorio_cache_web: Path = field(default_factory=lambda: Path("./.cache_web"))
+    diretorio_cache_sancoes: Path = field(
+        default_factory=lambda: Path("./.cache_sancoes")
+    )
 
     # Execução
     verboso: bool = False
@@ -269,6 +277,7 @@ class Config:
         self.diretorio_saida = Path(self.diretorio_saida).expanduser()
         self.diretorio_cache_cnpj = Path(self.diretorio_cache_cnpj).expanduser()
         self.diretorio_cache_web = Path(self.diretorio_cache_web).expanduser()
+        self.diretorio_cache_sancoes = Path(self.diretorio_cache_sancoes).expanduser()
         # Exigir garantia no texto implica ler os anexos (senão não há texto).
         if self.exigir_garantia_no_texto:
             self.ler_anexos_pdf = True
@@ -313,6 +322,9 @@ class Config:
             "ReceitaWS (fallback)": self.usar_receitaws,
             "Enriquecer web": self.enriquecer_web,
             "Web (máx. empresas)": self.web_max_empresas or "sem limite",
+            "Consultar sanções (CEIS/CNEP)": (
+                "sim" if (self.enriquecer_sancoes and self.transparencia_api_key) else "não"
+            ),
             "Paralelismo (threads)": self.max_workers,
             "Palavras-chave garantia": "; ".join(self.palavras_chave_garantia),
         }
@@ -369,6 +381,9 @@ def carregar_config(
         pausa_web=float(env.get("PAUSA_WEB", 5) or 5),
         pausa_cnpj=float(env.get("PAUSA_CNPJ", 0.5) or 0),
         max_workers=int(env.get("MAX_WORKERS", 6) or 6),
+        enriquecer_sancoes=_bool(env.get("ENRIQUECER_SANCOES"), True),
+        transparencia_api_key=(env.get("TRANSPARENCIA_API_KEY", "") or "").strip(),
+        pausa_sancoes=float(env.get("PAUSA_SANCOES", 0.3) or 0.3),
         pausa_entre_requisicoes=float(env.get("PAUSA_ENTRE_REQUISICOES", 3) or 3),
         max_paginas=int(env.get("MAX_PAGINAS", 200) or 200),
         tamanho_pagina=int(env.get("TAMANHO_PAGINA", 50) or 50),
