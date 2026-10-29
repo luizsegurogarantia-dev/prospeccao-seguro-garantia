@@ -259,8 +259,13 @@ seguro-garantia-b2b/
 
 ## 12. Publicar como site (link público)
 
-Para usar a interface de qualquer lugar (celular, outro computador) sem instalar
-nada, use o túnel do Cloudflare:
+**Link oficial (sempre no ar, sem precisar do computador ligado):**
+<https://prospeccao-seguro-garantia.streamlit.app>
+
+Ele roda no Streamlit Community Cloud, a partir do repositório no GitHub. Para
+atualizar o site, basta um `git push` (veja `DEPLOY.md`).
+
+### Alternativa local (link temporário)
 
 ```bash
 ./publicar.sh                      # abre o app e mostra um link https://....trycloudflare.com

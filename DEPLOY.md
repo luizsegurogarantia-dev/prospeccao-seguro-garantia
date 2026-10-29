@@ -1,5 +1,8 @@
 # Publicar no Streamlit Community Cloud
 
+**App no ar:** https://prospeccao-seguro-garantia.streamlit.app
+**Repositório:** https://github.com/luizsegurogarantia-dev/prospeccao-seguro-garantia
+
 Guia rápido para colocar a interface num link fixo (ex.:
 `https://prospeccao-seguro-garantia.streamlit.app`), funcionando mesmo com o
 computador desligado.
