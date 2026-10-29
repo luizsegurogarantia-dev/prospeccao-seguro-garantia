@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+saida/
+saida_*/
+.cache_cnpj/
+.cache_web/
+*.log
+
+.streamlit/secrets.toml
+.env.local

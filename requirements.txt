@@ -1,0 +1,21 @@
+# Dependências da aplicação de prospecção B2B - Seguro Garantia
+#
+# requests       -> chamadas HTTP (PNCP, BrasilAPI, ReceitaWS, portais)
+# beautifulsoup4 -> parsing de HTML no enriquecimento web
+# lxml           -> parser rápido do BeautifulSoup
+# pandas         -> consolidação e exportação da planilha
+# openpyxl       -> geração do .xlsx com formatação
+# python-dotenv  -> leitura dos parâmetros via arquivo .env
+# streamlit      -> interface gráfica opcional
+# pypdf          -> leitura opcional de editais em PDF (busca de cláusula de garantia)
+#
+# Instalar com:  pip install -r requirements.txt
+
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+pandas>=2.1
+openpyxl>=3.1
+python-dotenv>=1.0
+streamlit>=1.30
+pypdf>=4.0
