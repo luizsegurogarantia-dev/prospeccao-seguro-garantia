@@ -12,6 +12,7 @@ maioria dos casos de grande vulto com uma única integração.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..models import RegistroLicitacao
@@ -88,17 +89,30 @@ class FontePNCP(FonteBase):
             if orgao_cnpj and ano and seq
             else ""
         )
+        controle_compra = item.get("numeroControlePncpCompra", "") or ""
+        link_edital = _link_edital_por_controle(controle_compra)
 
         return RegistroLicitacao(
             fonte=self.nome,
             tipo_registro=tipo_registro,
             data_evento=item.get("dataPublicacaoPncp") or item.get("dataAssinatura") or "",
+            data_resultado=item.get("dataPublicacaoPncp") or item.get("dataAssinatura") or "",
+            data_assinatura=item.get("dataAssinatura") or "",
+            vigencia_inicio=item.get("dataVigenciaInicio")
+            or item.get("dataVigenciaInicial")
+            or "",
+            vigencia_fim=item.get("dataVigenciaFim")
+            or item.get("dataVigenciaFinal")
+            or "",
             uf=unidade.get("ufSigla", "") or "",
             cidade=unidade.get("municipioNome", "") or "",
             orgao=orgao.get("razaoSocial", "") or item.get("nomeRazaoSocialFornecedor", ""),
             objeto=item.get("objetoContrato", "") or "",
             valor=float(item.get("valorGlobal") or item.get("valorInicial") or 0),
             link=link,
+            link_edital=link_edital,
+            link_resultado=link,
+            link_contrato=link,
             cnpj_vencedor=_somente_digitos(item.get("niFornecedor", "")),
             nome_vencedor=item.get("nomeRazaoSocialFornecedor", "") or "",
             modalidade=tipo_contrato,
@@ -112,7 +126,8 @@ class FontePNCP(FonteBase):
             link_origem=item.get("linkSistemaOrigem") or "",
             metadados={
                 "processo": item.get("processo", ""),
-                "numero_controle_compra": item.get("numeroControlePncpCompra", "") or "",
+                "numero_controle_compra": controle_compra,
+                "data_atualizacao": item.get("dataAtualizacao", ""),
             },
         )
 
@@ -168,12 +183,15 @@ class FontePNCP(FonteBase):
             fonte=self.nome,
             tipo_registro="Licitação Nova",
             data_evento=item.get("dataPublicacaoPncp") or item.get("dataInclusao") or "",
+            data_resultado=item.get("dataPublicacaoPncp") or item.get("dataInclusao") or "",
             uf=unidade.get("ufSigla", "") or "",
             cidade=unidade.get("municipioNome", "") or "",
             orgao=orgao.get("razaoSocial", "") or "",
             objeto=item.get("objetoCompra", "") or "",
             valor=float(valor or 0),
             link=link,
+            link_edital=link,
+            link_resultado=link,
             cnpj_vencedor="",
             nome_vencedor="",
             modalidade=item.get("modalidadeNome", "") or "",
@@ -264,3 +282,15 @@ class FontePNCP(FonteBase):
 
 def _somente_digitos(valor: Any) -> str:
     return "".join(c for c in str(valor or "") if c.isdigit())
+
+
+def _link_edital_por_controle(controle: str) -> str:
+    """Converte o número de controle da compra em link do edital no PNCP.
+
+    Formato usual: ``12345678000199-1-000001/2025``.
+    """
+    achado = re.match(r"^(\d{14})-\d+-(\d+)/(\d{4})$", (controle or "").strip())
+    if not achado:
+        return ""
+    cnpj, sequencial, ano = achado.groups()
+    return f"{BASE_APP}/editais/{cnpj}/{ano}/{int(sequencial)}"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -16,17 +16,31 @@ from .enrich.cnpj import EnriquecendorCNPJ
 from .enrich.email import email_valido
 from .enrich.sancoes import ConsultorSancoes
 from .enrich.web import EnriquecendorWeb
+from .execucao import registrar_ultima_execucao
 from .exporter import exportar, montar_dataframe
 from .filters import (
     calcular_valor_garantia,
     cnae_do_ramo,
     extrair_clausula_garantia,
+    normalizar,
     registro_tem_garantia,
 )
 from .http_client import ClienteHTTP
 from .models import DadosCNPJ, RegistroLicitacao, telefone_eh_celular
+from .oportunidade import (
+    calcular_score_confianca,
+    classificar_garantia,
+    extrair_prazo_execucao,
+    formatar_vigencia,
+    pendencias,
+    prazo_por_vigencia,
+    prioridade_comercial,
+    resumo_links,
+    setor_atividade,
+)
 from .pdf_text import ler_pdf
 from .sources import FonteBase, FonteENegociosSP, FontePNCP, montar_fontes
+from .validacao import formatar_cnpj, formatar_data, parse_data, validar_cnpj
 
 log = logging.getLogger("seguro_garantia.pipeline")
 
@@ -40,17 +54,45 @@ class ResultadoExecucao:
     total_bruto: int
     total_final: int
     duracao_segundos: float
+    erros: list[str] = field(default_factory=list)
+    ultima_execucao: dict[str, Any] | None = None
 
 
 def executar(config: Config, progresso: Progresso | None = None) -> ResultadoExecucao:
     inicio = datetime.now()
     _configurar_log(config)
+    erros: list[str] = []
 
     def avisar(mensagem: str, atual: int = 0, total: int = 0) -> None:
         log.info(mensagem)
         if progresso:
             progresso(mensagem, atual, total)
 
+    try:
+        return _executar(config, avisar, erros, inicio)
+    except Exception as exc:  # registra a falha antes de propagar
+        erros.append(str(exc))
+        _gravar_ultima_execucao(
+            config=config,
+            status="falha",
+            erros=erros,
+            inicio=inicio,
+            total_bruto=0,
+            total_final=0,
+            duracao=(datetime.now() - inicio).total_seconds(),
+            arquivos={},
+            fontes=[],
+            df=None,
+        )
+        raise
+
+
+def _executar(
+    config: Config,
+    avisar: Callable[..., None],
+    erros: list[str],
+    inicio: datetime,
+) -> ResultadoExecucao:
     with ClienteHTTP(
         timeout=config.timeout,
         max_tentativas=config.max_tentativas,
@@ -64,14 +106,19 @@ def executar(config: Config, progresso: Progresso | None = None) -> ResultadoExe
         fontes: list[FonteBase] = montar_fontes(config, http, progresso=avisar)
 
         registros: list[RegistroLicitacao] = []
+        fontes_usadas: list[str] = []
         for fonte in fontes:
+            fontes_usadas.append(fonte.nome)
             try:
                 registros.extend(fonte.coletar())
             except Exception as exc:  # uma fonte com erro não derruba o todo
-                avisar(f"Falha na fonte {fonte.nome}: {exc}")
+                mensagem = f"Falha na fonte {fonte.nome}: {exc}"
+                erros.append(mensagem)
+                avisar(mensagem)
 
         # 1b) Fontes complementares que dependem dos CNPJs já coletados -------
         if config.usar_enegocios_sp:
+            fontes_usadas.append("e-Negócios SP")
             cnpjs_conhecidos = [
                 r.cnpj_vencedor for r in registros if r.cnpj_vencedor
             ]
@@ -80,11 +127,27 @@ def executar(config: Config, progresso: Progresso | None = None) -> ResultadoExe
                 try:
                     registros.extend(fonte_eneg.coletar(cnpjs_conhecidos))
                 except Exception as exc:
-                    avisar(f"Falha na fonte {fonte_eneg.nome}: {exc}")
+                    mensagem = f"Falha na fonte {fonte_eneg.nome}: {exc}"
+                    erros.append(mensagem)
+                    avisar(mensagem)
 
         total_bruto = len(registros)
         registros = _deduplicar(registros)
         avisar(f"{total_bruto} registros brutos | {len(registros)} após deduplicação")
+
+        # 1c) Trava da janela: nada fora dos N dias corridos configurados -----
+        antes_janela = len(registros)
+        registros = [r for r in registros if _na_janela(r, config)]
+        if len(registros) != antes_janela:
+            avisar(
+                f"Janela de {config.dias_retroativos} dias "
+                f"({config.data_inicial:%d/%m/%Y} a {config.data_final:%d/%m/%Y}): "
+                f"{antes_janela} -> {len(registros)} registros"
+            )
+
+        # 1d) Links diretos de edital/ata/resultado/contrato -------------------
+        if config.coletar_links_documentos:
+            _enriquecer_links_documentos(registros, fonte_pncp, http, config, avisar)
 
         # 2) Texto do edital (PDF) e filtro de garantia ---------------------
         if config.ler_anexos_pdf:
@@ -168,16 +231,147 @@ def executar(config: Config, progresso: Progresso | None = None) -> ResultadoExe
         duracao = (datetime.now() - inicio).total_seconds()
         avisar(f"Concluído em {duracao:.0f}s. {len(linhas)} linhas exportadas.")
 
+        status = "parcial" if erros else "sucesso"
+        ultima = _gravar_ultima_execucao(
+            config=config,
+            status=status,
+            erros=erros,
+            inicio=inicio,
+            total_bruto=total_bruto,
+            total_final=len(linhas),
+            duracao=duracao,
+            arquivos=arquivos,
+            fontes=fontes_usadas,
+            df=df,
+        )
+
         return ResultadoExecucao(
             dataframe=df,
             arquivos=arquivos,
             total_bruto=total_bruto,
             total_final=len(linhas),
             duracao_segundos=duracao,
+            erros=erros,
+            ultima_execucao=ultima,
         )
 
 
 # --------------------------------------------------------------- internals
+def _na_janela(registro: RegistroLicitacao, config: Config) -> bool:
+    """Mantém registros sem data (sinalizados) e descarta os fora da janela."""
+    for valor in (registro.data_resultado, registro.data_evento):
+        resultado = config.dentro_da_janela(valor)
+        if resultado is not None:
+            return resultado
+    return True
+
+
+def _gravar_ultima_execucao(
+    *,
+    config: Config,
+    status: str,
+    erros: list[str],
+    inicio: datetime,
+    total_bruto: int,
+    total_final: int,
+    duracao: float,
+    arquivos: dict[str, Path],
+    fontes: list[str],
+    df: pd.DataFrame | None,
+) -> dict[str, Any] | None:
+    if not config.registrar_ultima_execucao:
+        return None
+    dados: dict[str, Any] = {
+        "status": status,
+        "inicio": inicio.isoformat(timespec="seconds"),
+        "janela": {
+            "dias": config.dias_retroativos,
+            "data_inicial": config.data_inicial.strftime("%d/%m/%Y"),
+            "data_final": config.data_final.strftime("%d/%m/%Y"),
+        },
+        "totais": {
+            "registros_brutos": total_bruto,
+            "linhas_exportadas": total_final,
+        },
+        "duracao_segundos": round(duracao, 1),
+        "fontes": fontes,
+        "erros": erros,
+        "arquivos": {formato: str(caminho) for formato, caminho in arquivos.items()},
+        "parametros": config.resumo(),
+    }
+    if df is not None and not df.empty:
+        dados["resumo_oportunidades"] = {
+            "garantia_confirmada": int(
+                (df.get("Garantia_Status", pd.Series(dtype=str)) == "Confirmada").sum()
+            ),
+            "garantia_provavel": int(
+                (df.get("Garantia_Status", pd.Series(dtype=str)) == "Provável").sum()
+            ),
+            "prioridade_alta": int(
+                (df.get("Prioridade_Comercial", pd.Series(dtype=str)) == "Alta").sum()
+            ),
+        }
+    try:
+        registrar_ultima_execucao(config, dados)
+    except Exception as exc:  # registro não pode derrubar a exportação
+        log.warning("não foi possível registrar a última execução: %s", exc)
+    return dados
+
+
+def _enriquecer_links_documentos(
+    registros: list[RegistroLicitacao],
+    fonte_pncp: FontePNCP,
+    http: ClienteHTTP,
+    config: Config,
+    avisar: Callable[..., None],
+) -> None:
+    """Busca a lista de documentos do PNCP e separa edital/ata/resultado/contrato."""
+    alvos = [r for r in registros if r.fonte == fonte_pncp.nome and r.cnpj_vencedor]
+    if not alvos:
+        return
+    limite = config.links_max_registros
+    if limite and limite > 0:
+        alvos = sorted(alvos, key=lambda r: r.valor or 0.0, reverse=True)[:limite]
+    total = len(alvos)
+    if not total:
+        return
+    avisar(f"Buscando links de documentos de {total} registros no PNCP...")
+    for i, registro in enumerate(alvos, start=1):
+        try:
+            documentos = fonte_pncp.obter_documentos(registro)
+        except Exception as exc:  # documento é complementar; não interrompe
+            log.debug("falha ao obter documentos de %s: %s", registro.numero_controle, exc)
+            documentos = []
+        for doc in documentos:
+            url = doc.get("url", "")
+            if not url:
+                continue
+            tipo = _tipo_documento(doc.get("titulo", ""), doc.get("tipo", ""))
+            if tipo == "edital" and not registro.link_edital:
+                registro.link_edital = url
+            elif tipo == "ata" and not registro.link_ata:
+                registro.link_ata = url
+            elif tipo == "resultado" and not registro.link_resultado:
+                registro.link_resultado = url
+            elif tipo == "contrato" and not registro.link_contrato:
+                registro.link_contrato = url
+        avisar(f"Links PNCP {i}/{total}", i, total)
+        http.dormir(config.pausa_entre_requisicoes)
+
+
+def _tipo_documento(titulo: str, tipo: str) -> str:
+    base = normalizar(f"{titulo} {tipo}")
+    if "ata" in base:
+        return "ata"
+    if any(t in base for t in ("resultado", "homolog", "adjudic", "julgamento")):
+        return "resultado"
+    if any(t in base for t in ("edital", "minuta", "termo de referencia", "projeto basico")):
+        return "edital"
+    if any(t in base for t in ("contrato", "termo aditivo", "aditivo")):
+        return "contrato"
+    return "outro"
+
+
 def _enriquecer_web_paralelo(
     http: ClienteHTTP,
     config: Config,
@@ -256,15 +450,16 @@ def _consultar_sancoes_paralelo(
 
 
 def _deduplicar(registros: list[RegistroLicitacao]) -> list[RegistroLicitacao]:
-    vistos: set[str] = set()
-    unicos = []
+    """Remove duplicidades e complementa o registro remanescente."""
+    por_chave: dict[str, RegistroLicitacao] = {}
     for registro in registros:
         chave = registro.chave_dedup()
-        if chave in vistos:
-            continue
-        vistos.add(chave)
-        unicos.append(registro)
-    return unicos
+        existente = por_chave.get(chave)
+        if existente is None:
+            por_chave[chave] = registro
+        else:
+            existente.mesclar(registro)
+    return list(por_chave.values())
 
 
 def _enriquecer_com_pdf(
@@ -377,31 +572,67 @@ def _montar_linha(
     # Cláusula de garantia: só faz sentido dizer "não identificado" quando
     # houve texto para ler. Sem leitura, a coluna fica vazia (não é falha).
     texto_lido = bool((registro.texto_extra or "").strip())
-    clausula = extrair_clausula_garantia(registro.texto_extra)
+    qualificacao = classificar_garantia(
+        registro, texto_lido, config.palavras_chave_garantia
+    )
+    status_garantia = qualificacao["status"]
+    clausula = {
+        chave.replace("clausula_", ""): valor
+        for chave, valor in qualificacao.items()
+        if chave.startswith("clausula_")
+    }
 
     def _do_edital(campo: str) -> str:
         if not texto_lido:
             return ""
         return clausula.get(campo) or "Não identificado"
 
+    setor = setor_atividade(dados, registro.objeto)
+    score = calcular_score_confianca(
+        registro, dados, contatos, status_garantia, setor
+    )
+    prioridade = prioridade_comercial(
+        registro,
+        status_garantia,
+        score,
+        valor_garantia,
+        dados.sancoes if dados.sancoes_verificado else None,
+    )
+    pendencias_texto = pendencias(registro, dados, contatos, status_garantia)
+    cnpj_valido = validar_cnpj(registro.cnpj_vencedor)
+    link_contrato = registro.link_contrato or registro.link
+    link_principal = registro.link_edital or link_contrato or registro.link_origem
+    prazo_execucao = (
+        registro.prazo_execucao
+        or extrair_prazo_execucao(registro.texto_extra)
+        or prazo_por_vigencia(registro.vigencia_inicio, registro.vigencia_fim)
+    )
+    vigencia = formatar_vigencia(registro.vigencia_inicio, registro.vigencia_fim)
+    data_resultado = formatar_data(registro.data_resultado or registro.data_evento)
+
     return {
         "Fonte_Origem": registro.fonte,
         "Tipo_Registro": registro.tipo_registro,
-        "Data_Publicacao_Homologacao": _formatar_data(registro.data_evento),
+        "Data_Publicacao_Homologacao": data_resultado,
+        "Data_Resultado": data_resultado,
         "Estado_UF": registro.uf or dados.uf or "",
         "Cidade_Orgao": registro.cidade or "",
         "Orgao_Licitante": registro.orgao,
         "Objeto_Contratado": registro.objeto,
         "Valor_Contrato": registro.valor or 0.0,
         "Valor_Garantia_Estimado": valor_garantia,
-        "Link_Edital_Contrato": registro.link or registro.link_origem or "",
-        "CNPJ_Vencedor": _formatar_cnpj(registro.cnpj_vencedor),
+        "Link_Edital_Contrato": link_principal,
+        "CNPJ_Vencedor": formatar_cnpj(registro.cnpj_vencedor),
+        "CNPJ_Valido": (
+            "Sim" if cnpj_valido else ("Não" if registro.cnpj_vencedor else "Não informado")
+        ),
         "Razao_Social_Vencedora": nome_empresa or "Não localizado",
         "Socios_Administradores": dados.socios_str if registro.cnpj_vencedor else "Não localizado",
         "Telefone_Receita": telefone_receita or "Não localizado",
         "Celular_WhatsApp_Encontrado": celular or "Não localizado",
         "Email_Contato": "; ".join(emails) if emails else "Não localizado",
         "Cidade_Empresa": _endereco_empresa(dados) or "Não localizado",
+        "Setor_Atividade": setor,
         # --- Dossiê cadastral ---
         "Perfil_Empresa": dados.perfil_str,
         "Porte_Empresa": dados.porte or "Não localizado",
@@ -412,11 +643,30 @@ def _montar_linha(
         "Simples_Nacional": dados.simples or "Não localizado",
         "CNAE_Principal": dados.cnae_principal or "Não localizado",
         "Sancoes": dados.sancoes_str,
+        # --- Processo, prazos e vigência ---
+        "Numero_Processo": registro.processo or "",
+        "Numero_Edital_Contrato": registro.numero_documento or "",
+        "Data_Assinatura_Contrato": formatar_data(registro.data_assinatura),
+        "Prazo_Execucao": prazo_execucao or "",
+        "Vigencia_Contratual": vigencia or "",
         # --- Cláusula de garantia do edital ---
+        "Garantia_Status": status_garantia,
+        "Garantia_Justificativa": qualificacao["justificativa"],
+        "Garantia_Evidencias": qualificacao["evidencias"],
         "Garantia_Percentual_Edital": _do_edital("percentual"),
         "Prazo_Apresentacao_Garantia": _do_edital("prazo"),
         "Modalidade_Garantia_Aceita": _do_edital("modalidade"),
         "Vigencia_Garantia": _do_edital("vigencia"),
+        # --- Links e rastreabilidade ---
+        "Link_Edital": registro.link_edital or "",
+        "Link_Resultado": registro.link_resultado or "",
+        "Link_Contrato": link_contrato or "",
+        "Link_Ata": registro.link_ata or "",
+        "Fonte_Dados": resumo_links(registro),
+        # --- Qualificação comercial ---
+        "Score_Confianca": score,
+        "Prioridade_Comercial": prioridade,
+        "Pendencias": pendencias_texto,
         # --- Contatos complementares ---
         "Site_Empresa": contatos["site"] or "Não localizado",
         "Outros_Emails": "; ".join(outros_emails),
@@ -431,21 +681,11 @@ def _endereco_empresa(dados: DadosCNPJ) -> str:
 
 
 def _formatar_cnpj(cnpj: str) -> str:
-    digitos = "".join(c for c in str(cnpj or "") if c.isdigit())
-    if len(digitos) != 14:
-        return cnpj or ""
-    return f"{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:]}"
+    return formatar_cnpj(cnpj)
 
 
 def _formatar_data(valor: str) -> str:
-    if not valor:
-        return ""
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(valor[:19], fmt).strftime("%d/%m/%Y")
-        except ValueError:
-            continue
-    return valor
+    return formatar_data(valor)
 
 
 def _configurar_log(config: Config) -> None:

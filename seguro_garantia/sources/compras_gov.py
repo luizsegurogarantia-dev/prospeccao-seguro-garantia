@@ -71,6 +71,17 @@ class FonteComprasGov(FonteBase):
             fonte=self.nome,
             tipo_registro="Contrato Homologado",
             data_evento=item.get("dataHoraInclusao", "") or "",
+            data_resultado=item.get("dataHoraInclusao", "")
+            or item.get("dataPublicacaoPncp", "")
+            or item.get("dataAssinatura", "")
+            or "",
+            data_assinatura=item.get("dataAssinatura", "") or "",
+            vigencia_inicio=item.get("dataVigenciaInicial", "")
+            or item.get("dataVigenciaInicio", "")
+            or "",
+            vigencia_fim=item.get("dataVigenciaFinal", "")
+            or item.get("dataVigenciaFim", "")
+            or "",
             uf="",
             cidade="",
             orgao=item.get("nomeOrgao", "") or item.get("nomeUnidadeGestora", ""),
@@ -85,7 +96,11 @@ class FonteComprasGov(FonteBase):
             numero_controle=item.get("numeroControlePncpContrato", "")
             or f"{self.nome}-{item.get('codigoOrgao')}-{item.get('numeroContrato')}",
             link_origem=item.get("numeroControlePncpCompra", "") or "",
-            metadados={"processo": item.get("processo", ""), "codigo_orgao": item.get("codigoOrgao")},
+            metadados={
+                "processo": item.get("processo", ""),
+                "codigo_orgao": item.get("codigoOrgao"),
+                "numero_controle_compra": item.get("numeroControlePncpCompra", ""),
+            },
         )
 
     def _passa_filtros(self, registro: RegistroLicitacao) -> bool:

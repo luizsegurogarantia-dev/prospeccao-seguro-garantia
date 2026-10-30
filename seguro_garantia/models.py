@@ -18,6 +18,11 @@ class RegistroLicitacao:
     fonte: str
     tipo_registro: str  # "Licitação Nova", "Contrato Homologado" ou "Termo Aditado"
     data_evento: str = ""  # data de publicação/homologação (ISO ou DD/MM/AAAA)
+    data_resultado: str = ""  # adjudicação/homologação/publicação do resultado
+    data_assinatura: str = ""
+    vigencia_inicio: str = ""
+    vigencia_fim: str = ""
+    prazo_execucao: str = ""
     uf: str = ""
     cidade: str = ""
     orgao: str = ""
@@ -26,6 +31,15 @@ class RegistroLicitacao:
     link: str = ""
     cnpj_vencedor: str = ""
     nome_vencedor: str = ""
+    # Campo calculado a partir do texto do edital/contrato (quando lido).
+    garantia_status: str = ""
+    garantia_evidencias: str = ""
+    garantia_justificativa: str = ""
+    # Links diretos para as peças do processo.
+    link_edital: str = ""
+    link_resultado: str = ""
+    link_contrato: str = ""
+    link_ata: str = ""
     # Campos auxiliares (não saem diretamente no arquivo final)
     modalidade: str = ""
     numero_controle: str = ""
@@ -40,10 +54,69 @@ class RegistroLicitacao:
     metadados: dict[str, Any] = field(default_factory=dict)
 
     def chave_dedup(self) -> str:
-        """Chave usada para eliminar duplicidades entre páginas/fontes."""
+        """Chave usada para eliminar duplicidades entre páginas e fontes.
+
+        O número de controle do PNCP é único e aparece também em fontes
+        complementares; por isso é a chave preferencial. Quando não existe,
+        usa-se uma combinação estável de CNPJ + documento + processo ou, em
+        último caso, objeto + valor.
+        """
+        from .validacao import normalizar_chave
+
         if self.numero_controle:
-            return f"{self.fonte}:{self.numero_controle}"
-        return f"{self.fonte}:{self.cnpj_vencedor}:{self.objeto[:60]}:{self.valor}"
+            return "controle:" + normalizar_chave(self.numero_controle)
+        cnpj = "".join(c for c in self.cnpj_vencedor if c.isdigit())
+        if cnpj and (self.numero_documento or self.processo):
+            return normalizar_chave(
+                f"doc:{cnpj}:{self.numero_documento}:{self.processo}"
+            )
+        return normalizar_chave(
+            f"obj:{cnpj}:{self.objeto[:80]}:{round(float(self.valor or 0), 2)}"
+        )
+
+    def mesclar(self, outro: "RegistroLicitacao") -> None:
+        """Complementa campos vazios com os dados de um registro duplicado."""
+        for campo in (
+            "data_evento",
+            "data_resultado",
+            "data_assinatura",
+            "vigencia_inicio",
+            "vigencia_fim",
+            "prazo_execucao",
+            "uf",
+            "cidade",
+            "orgao",
+            "objeto",
+            "link",
+            "cnpj_vencedor",
+            "nome_vencedor",
+            "garantia_status",
+            "garantia_evidencias",
+            "garantia_justificativa",
+            "link_edital",
+            "link_resultado",
+            "link_contrato",
+            "link_ata",
+            "modalidade",
+            "numero_controle",
+            "numero_documento",
+            "processo",
+            "orgao_cnpj",
+            "texto_extra",
+            "link_origem",
+        ):
+            atual = getattr(self, campo)
+            novo = getattr(outro, campo)
+            if (atual in ("", None)) and novo not in ("", None):
+                setattr(self, campo, novo)
+        if not self.valor and outro.valor:
+            self.valor = outro.valor
+        if self.ano_compra is None and outro.ano_compra is not None:
+            self.ano_compra = outro.ano_compra
+        if self.sequencial_compra is None and outro.sequencial_compra is not None:
+            self.sequencial_compra = outro.sequencial_compra
+        for chave, valor in (outro.metadados or {}).items():
+            self.metadados.setdefault(chave, valor)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

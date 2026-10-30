@@ -36,6 +36,30 @@ def construir_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="excluir editais ainda sem vencedor (sem CNPJ)",
     )
+    p.add_argument(
+        "--incluir-editais-sem-vencedor",
+        action="store_true",
+        help="incluir editais ainda sem vencedor (mapeamento de mercado)",
+    )
+    p.add_argument(
+        "--sem-links",
+        dest="coletar_links_documentos",
+        action="store_false",
+        help="não buscar links de edital/ata/resultado/contrato no PNCP",
+    )
+    p.set_defaults(coletar_links_documentos=None)
+    p.add_argument(
+        "--links-max",
+        type=int,
+        help="máximo de registros com busca de links (0 = sem limite)",
+    )
+    p.add_argument(
+        "--sem-ultima-execucao",
+        dest="registrar_ultima_execucao",
+        action="store_false",
+        help="não gravar o arquivo ultima_execucao.json",
+    )
+    p.set_defaults(registrar_ultima_execucao=None)
     p.add_argument("--compras-gov", action="store_true", help="incluir a fonte Compras.gov.br")
     p.add_argument("--sem-ramo", dest="filtrar_por_ramo", action="store_false", help="não filtrar por ramo de atividade")
     p.set_defaults(filtrar_por_ramo=None)
@@ -85,7 +109,14 @@ def executar_cli(argv: list[str] | None = None) -> int:
         "ufs": _lista(args.ufs),
         "modalidades": _lista_int(args.modalidades),
         "buscar_editais": False if args.sem_editais else None,
-        "incluir_editais_sem_vencedor": False if args.sem_editais_sem_vencedor else None,
+        "incluir_editais_sem_vencedor": (
+            True
+            if args.incluir_editais_sem_vencedor
+            else (False if args.sem_editais_sem_vencedor else None)
+        ),
+        "coletar_links_documentos": args.coletar_links_documentos,
+        "links_max_registros": args.links_max,
+        "registrar_ultima_execucao": args.registrar_ultima_execucao,
         "usar_compras_gov": True if args.compras_gov else None,
         "filtrar_por_ramo": args.filtrar_por_ramo,
         "filtrar_por_cnae": True if args.cnae else None,

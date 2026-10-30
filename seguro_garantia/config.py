@@ -173,7 +173,7 @@ def _data(valor: str | None) -> date:
 class Config:
     """Todos os parâmetros de execução da aplicação."""
 
-    # Janela de busca
+    # Janela de busca (N dias corridos, incluindo a data de referência)
     dias_retroativos: int = 30
     data_referencia: date = field(default_factory=date.today)
     data_inicial: date = field(init=False)
@@ -201,7 +201,11 @@ class Config:
     ufs: list[str] = field(default_factory=list)
     modalidades: list[int] = field(default_factory=lambda: list(MODALIDADES_PADRAO))
     buscar_editais: bool = True
-    incluir_editais_sem_vencedor: bool = True
+    incluir_editais_sem_vencedor: bool = False
+
+    # Links de documentos (edital, ata, resultado, contrato) no PNCP.
+    coletar_links_documentos: bool = True
+    links_max_registros: int = 50
 
     # Fontes complementares
     usar_compras_gov: bool = False
@@ -252,6 +256,7 @@ class Config:
     nome_arquivo: str = "prospeccao_seguro_garantia"
     gerar_csv: bool = True
     incluir_aba_parametros: bool = True
+    registrar_ultima_execucao: bool = True
 
     # Diretórios de cache
     diretorio_cache_cnpj: Path = field(default_factory=lambda: Path("./.cache_cnpj"))
@@ -270,7 +275,13 @@ class Config:
         if self.dias_retroativos < 0:
             self.dias_retroativos = 0
         self.data_final = self.data_referencia
-        self.data_inicial = self.data_referencia - timedelta(days=self.dias_retroativos)
+        # A janela é inclusiva nas duas pontas: 30 dias = hoje + 29 anteriores.
+        if self.dias_retroativos <= 1:
+            self.data_inicial = self.data_referencia
+        else:
+            self.data_inicial = self.data_referencia - timedelta(
+                days=self.dias_retroativos - 1
+            )
         # Recalcula data_final caso data_referencia tenha sido passada sem __post_init__
         if self.data_final < self.data_inicial:
             self.data_final = self.data_inicial
@@ -283,11 +294,19 @@ class Config:
             self.ler_anexos_pdf = True
         if self.max_workers < 1:
             self.max_workers = 1
+        if self.links_max_registros < 0:
+            self.links_max_registros = 0
 
     # ---------------------------------------------------------------- helpers
     def datas_pncp(self) -> tuple[str, str]:
         """Retorna (dataInicial, dataFinal) no formato AAAAMMDD esperado pelo PNCP."""
         return self.data_inicial.strftime("%Y%m%d"), self.data_final.strftime("%Y%m%d")
+
+    def dentro_da_janela(self, valor: object) -> bool | None:
+        """Diz se uma data está na janela inclusiva (None = não interpretada)."""
+        from .validacao import dentro_janela
+
+        return dentro_janela(valor, self.data_inicial, self.data_final)
 
     def resumo(self) -> dict[str, object]:
         """Dicionário com os parâmetros para a aba `Parametros` / logs."""
@@ -301,6 +320,9 @@ class Config:
             "Modalidades (editais)": ", ".join(map(str, self.modalidades)),
             "Buscar editais": self.buscar_editais,
             "Incluir editais sem vencedor": self.incluir_editais_sem_vencedor,
+            "Coletar links de documentos": self.coletar_links_documentos,
+            "Máx. registros com links": self.links_max_registros,
+            "Registrar última execução": self.registrar_ultima_execucao,
             "Compras.gov.br": self.usar_compras_gov,
             "Licitações-E (BB)": self.usar_licitacoes_e,
             "CAIXA": self.usar_caixa,
@@ -354,7 +376,9 @@ def carregar_config(
         ufs=_lista_ufs(env.get("UFS")),
         modalidades=_lista_int(env.get("MODALIDADES"), MODALIDADES_PADRAO),
         buscar_editais=_bool(env.get("BUSCAR_EDITAIS"), True),
-        incluir_editais_sem_vencedor=_bool(env.get("INCLUIR_EDITAIS_SEM_VENCEDOR"), True),
+        incluir_editais_sem_vencedor=_bool(env.get("INCLUIR_EDITAIS_SEM_VENCEDOR"), False),
+        coletar_links_documentos=_bool(env.get("COLETAR_LINKS_DOCUMENTOS"), True),
+        links_max_registros=int(env.get("LINKS_MAX_REGISTROS", 50) or 50),
         usar_compras_gov=_bool(env.get("USAR_COMPRAS_GOV"), False),
         compras_gov_orgaos=[
             c.strip() for c in (env.get("COMPRAS_GOV_ORGAOS", "") or "").split(",") if c.strip()
@@ -394,6 +418,7 @@ def carregar_config(
         or "prospeccao_seguro_garantia",
         gerar_csv=_bool(env.get("GERAR_CSV"), True),
         incluir_aba_parametros=_bool(env.get("INCLUIR_ABA_PARAMETROS"), True),
+        registrar_ultima_execucao=_bool(env.get("REGISTRAR_ULTIMA_EXECUCAO"), True),
     )
 
     overrides = {k: v for k, v in overrides.items() if v is not None}
